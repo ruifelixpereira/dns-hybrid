@@ -1,0 +1,80 @@
+{
+  "schemaVersion": 1,
+  "inventoryId": "example-inventory",
+  "tenantId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+  "collectionStartedAt": "2026-11-18T12:00:00Z",
+  "collectionCompletedAt": "2026-11-18T12:01:00Z",
+  "subscriptions": [
+    {"name": "Network", "id": "11111111-1111-1111-1111-111111111111", "state": "Enabled"},
+    {"name": "Workloads", "id": "22222222-2222-2222-2222-222222222222", "state": "Enabled"}
+  ],
+  "excludedSubscriptions": [
+    {"name": "Disabled", "id": "33333333-3333-3333-3333-333333333333", "state": "Disabled", "reason": "Subscription state is Disabled"}
+  ],
+  "privateDnsZones": [
+    {
+      "name": "private.example",
+      "id": "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/dns/providers/Microsoft.Network/privateDnsZones/private.example",
+      "subscriptionId": "11111111-1111-1111-1111-111111111111",
+      "resourceGroup": "dns",
+      "aRecordSets": [
+        {
+          "name": "@",
+          "id": "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/dns/providers/Microsoft.Network/privateDnsZones/private.example/A/@",
+          "fqdn": "private.example.",
+          "ttl": 300,
+          "isAutoRegistered": false,
+          "ipv4Addresses": ["10.0.0.4", "10.0.0.5"]
+        },
+        {
+          "name": "vm",
+          "id": "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/dns/providers/Microsoft.Network/privateDnsZones/private.example/A/vm",
+          "fqdn": "vm.private.example.",
+          "ttl": 10,
+          "isAutoRegistered": true,
+          "ipv4Addresses": ["10.1.0.4"]
+        }
+      ],
+      "virtualNetworkLinks": [
+        {
+          "name": "hub-link",
+          "id": "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/dns/providers/Microsoft.Network/privateDnsZones/private.example/virtualNetworkLinks/hub-link",
+          "registrationEnabled": false,
+          "virtualNetworkLinkState": "Completed",
+          "provisioningState": "Succeeded",
+          "virtualNetwork": {
+            "name": "hub",
+            "id": "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/network/providers/Microsoft.Network/virtualNetworks/hub"
+          }
+        },
+        {
+          "name": "spoke-link",
+          "id": "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/dns/providers/Microsoft.Network/privateDnsZones/private.example/virtualNetworkLinks/spoke-link",
+          "registrationEnabled": true,
+          "virtualNetworkLinkState": null,
+          "provisioningState": "Succeeded",
+          "virtualNetwork": {
+            "name": "spoke",
+            "id": "/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/network/providers/Microsoft.Network/virtualNetworks/spoke"
+          }
+        }
+      ]
+    },
+    {
+      "name": "private.example",
+      "id": "/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/other-dns/providers/Microsoft.Network/privateDnsZones/private.example",
+      "subscriptionId": "22222222-2222-2222-2222-222222222222",
+      "resourceGroup": "other-dns",
+      "aRecordSets": [],
+      "virtualNetworkLinks": []
+    },
+    {
+      "name": "empty.example",
+      "id": "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/another-dns/providers/Microsoft.Network/privateDnsZones/empty.example",
+      "subscriptionId": "11111111-1111-1111-1111-111111111111",
+      "resourceGroup": "another-dns",
+      "aRecordSets": [],
+      "virtualNetworkLinks": []
+    }
+  ]
+}
