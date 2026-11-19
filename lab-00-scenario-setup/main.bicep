@@ -1,7 +1,7 @@
 targetScope = 'subscription'
 
 @description('Use a region that supports DNS Private Resolver and the selected VM image/SKU.')
-param location string = 'westeurope'
+param location string = 'swedencentral'
 
 @minLength(3)
 @maxLength(12)

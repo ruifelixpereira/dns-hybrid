@@ -1,6 +1,6 @@
 using '../main.bicep'
 
-param location = 'westeurope'
+param location = 'swedencentral'
 param prefix = 'dnslab-a'
 param labCidr = '10.10.0.0/16'
 param adminPassword = readEnvironmentVariable('DNS_ADMIN_PASSWORD')

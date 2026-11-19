@@ -3,3 +3,12 @@ __pycache__/
 *.pyc
 *.parameters.json
 
+# Inventory
+inventory/
+inventorya/
+inventoryb/
+hub-dns-links*.csv
+
+# Custom
+MYLOG.md
+zz-MYLOG.md
