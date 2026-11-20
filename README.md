@@ -8,6 +8,7 @@ Hands-on labs for Azure hybrid DNS across independent subscriptions and tenants.
 | --- | --- |
 | [Lab 00 - Scenario setup](./lab-00-scenario-setup/README.md) | Deploy the baseline two-tenant networking, Private Resolver, private endpoints, and Windows DNS simulation. |
 | [Lab 01 - Inventory](./lab-01-inventory/README.md) | Export tenant-scoped private DNS and VNet inventories, then report explicit zone links to a hub and its direct peers. |
+| [Lab 02 - Central private DNS zones](./lab-02-central-dns-zones/README.md) | Create missing central private DNS zones and keep only resolver VNet links for CSV-listed destination-group zones. |
 
 Each lab contains its own infrastructure, parameters, scripts, tests, and instructions.
 Repository-wide configuration stays at the root.
