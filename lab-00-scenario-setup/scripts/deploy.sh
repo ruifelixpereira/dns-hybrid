@@ -40,5 +40,5 @@ export DNS_ADMIN_PASSWORD
 az deployment sub "$action" \
   --subscription "$subscription" \
   --name "dns-lab-$environment" \
-  --location swedencentral \
+  --location westeurope \
   --parameters "$root/parameters/$environment.bicepparam"

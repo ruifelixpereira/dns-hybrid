@@ -14,15 +14,15 @@ Create a new `lab-01-inventory/` folder, following the repository's lab layout:
 - `scripts/Export-Inventory.ps1`: PowerShell 7 implementation using Azure CLI
   and native PowerShell JSON handling, not the Az PowerShell modules.
 - `scripts/report_dns_hub_links.py`: one additional, cross-platform Python 3
-  script using only the standard library, consuming the two JSON files offline
+  script using only the standard library, consuming the combined JSON file offline
   and producing a CSV.
 - Focused tests and a README with prerequisites, permissions, schemas, limitations,
   and copy-ready examples for both exporters and the report.
 - Add the new lab to the root README's lab table without changing other labs.
 
 The Bash and PowerShell scripts are interchangeable alternatives. Each execution
-must produce the same two JSON document schemas:
-`private-dns-zones.json` and `virtual-networks.json`.
+must produce one JSON file, `<tenantId>-inventory.json`, prefixed with the
+requested tenant GUID and containing both private DNS zones and virtual networks.
 
 ### Exporter inputs and scope
 
@@ -50,28 +50,35 @@ must produce the same two JSON document schemas:
 
 ### JSON contract
 
-Use UTF-8 JSON with a documented, versioned schema. Both files from one run must
-share a generated `inventoryId`, tenant ID, collection start/end UTC timestamps,
-and subscription coverage metadata. Use these envelope fields:
+Use UTF-8 JSON with a documented, versioned schema. The combined document must
+contain a generated `inventoryId`, tenant ID, collection start/end UTC timestamps,
+and subscription coverage metadata shared by both collections. Use these fields:
 
 ```json
 {
   "schemaVersion": 1,
   "inventoryId": "<shared run identifier>",
   "tenantId": "<requested tenant ID>",
+  "hubVnetId": "<selected hub VNet ARM ID, or null if no VNets>",
   "collectionStartedAt": "<ISO 8601 UTC>",
   "collectionCompletedAt": "<ISO 8601 UTC>",
   "subscriptions": [
     {"name": "<subscription name>", "id": "<subscription GUID>", "state": "Enabled"}
   ],
   "excludedSubscriptions": [],
-  "privateDnsZones": []
+  "privateDnsZones": [],
+  "virtualNetworks": []
 }
 ```
 
-In the second document replace `privateDnsZones` with `virtualNetworks`; keep
-the other envelope fields identical. Each excluded-subscription entry must
+Each excluded-subscription entry must
 include its name, subscription GUID, state, and exclusion reason.
+
+Select `hubVnetId` across all collected subscriptions by the largest number of
+local VNet peering resources. Break ties by the largest number of private DNS
+zone links referencing the VNet, then the lowest case-insensitive VNet ID.
+Normalize case and trailing slashes when matching link references. Use JSON
+`null` when no VNets exist, and describe this selection as a topology heuristic.
 
 Every Azure resource object and resource reference must contain its actual
 `name` and full ARM resource `id`. Subscription IDs remain GUIDs, as shown above.
@@ -116,21 +123,22 @@ Sort collections deterministically by resource ID.
 - Validate dependencies and inputs before collection. Quote arguments safely,
   support paths containing spaces, and keep progress/diagnostics separate from
   serialized output.
-- Stage both documents and publish them only after collection and validation
+- Stage the combined document and publish it only after collection and validation
   succeed. Clean up this run's temporary files on failure without deleting
-  unrelated files or replacing valid output with partial data. Use the shared
-  inventory ID to detect mismatched files; do not claim two file replacements
-  constitute a transactional operation.
+  unrelated files or replacing valid output with partial data. Publish both
+  collections together using one file replacement.
 - Document that collection is not an atomic Azure snapshot: resources and links
   can change during enumeration.
 
 ### Offline hub-linked DNS report
 
-The Python script must require `--private-dns-json`, `--vnets-json`,
-`--hub-vnet-id`, and `--output-csv`.
+The Python script must accept `--inventory-json`, `--hub-vnet-id`, and
+`--output-csv`. Preserve support for legacy `--private-dns-json` and
+`--vnets-json` as an alternative to `--inventory-json`.
 
-1. Validate both JSON documents, required fields and types, supported schema
-   versions, and matching tenant IDs, inventory IDs, and coverage metadata.
+1. Validate both collections, required fields and types, and supported schema
+   versions. For legacy files, also validate matching tenant IDs, inventory IDs,
+   and coverage metadata.
    Reject malformed, mismatched, or unsupported input with a clear error and
    nonzero exit status.
 2. Require the hub's full VNet ARM ID, not its name, and verify that the hub
@@ -166,7 +174,7 @@ zone links to the hub or a direct peer, not zones automatically inherited by pee
 
 Use mocked Azure CLI responses and local fixtures only. Add focused tests for:
 
-- Both exporters producing schema-equivalent documents for the same mocked
+- Both exporters producing one schema-equivalent document for the same mocked
   multi-subscription inventory, including all A-record addresses and child links.
 - Empty and single-element collections and paginated responses.
 - A failed subscription or child-resource query producing a nonzero exit and no

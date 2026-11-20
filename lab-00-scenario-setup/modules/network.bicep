@@ -118,7 +118,7 @@ resource vnets 'Microsoft.Network/virtualNetworks@2025-01-01' = [for role in rol
         properties: union({
           addressPrefix: subnetPrefixes[role]
           defaultOutboundAccess: false
-          privateEndpointNetworkPolicies: role == 'endpoints' ? 'Disabled' : 'Enabled'
+          privateEndpointNetworkPolicies: contains(['endpoints', 'standalone'], role) ? 'Disabled' : 'Enabled'
         }, role == 'onprem' ? {
           natGateway: { id: nat.id }
           networkSecurityGroup: { id: dnsNsg.id }
@@ -147,6 +147,7 @@ resource peerings 'Microsoft.Network/virtualNetworks/virtualNetworkPeerings@2025
 output vnetIds object = toObject(roles, role => role, role => resourceId('Microsoft.Network/virtualNetworks', '${prefix}-${role}'))
 output participatingVnetIds string[] = [for role in participatingRoles: resourceId('Microsoft.Network/virtualNetworks', '${prefix}-${role}')]
 output endpointSubnetId string = resourceId('Microsoft.Network/virtualNetworks/subnets', '${prefix}-endpoints', 'workload')
+output standaloneSubnetId string = resourceId('Microsoft.Network/virtualNetworks/subnets', '${prefix}-standalone', 'workload')
 output inboundSubnetId string = resourceId('Microsoft.Network/virtualNetworks/subnets', '${prefix}-resolver', 'inbound')
 output outboundSubnetId string = resourceId('Microsoft.Network/virtualNetworks/subnets', '${prefix}-resolver', 'outbound')
 output onpremSubnetId string = resourceId('Microsoft.Network/virtualNetworks/subnets', '${prefix}-onprem', 'workload')

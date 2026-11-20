@@ -59,6 +59,59 @@ class Azure:
         return values
 
 
+def verify_registry(azure, lab):
+    services = lab["services"]
+    zone_id = lab["standaloneZoneId"]
+    links = azure.list(f"{zone_id}/virtualNetworkLinks", PRIVATE_DNS_API)
+    require(len(links) == 1 and
+            ids(link["properties"]["virtualNetwork"]["id"] for link in links) ==
+            ids([lab["vnetIds"]["standalone"]]),
+            "Registry private zone must link only to the standalone VNet.")
+    require(not links[0]["properties"]["registrationEnabled"],
+            "Registry zone auto-registration must be disabled.")
+
+    registry = azure.get(services["registryId"], "2023-07-01")
+    require(registry["sku"]["name"] == "Premium", "Registry private endpoint requires Premium.")
+    properties = registry["properties"]
+    require(properties["publicNetworkAccess"] == "Disabled", "Registry public access enabled.")
+    require(not properties["adminUserEnabled"], "Registry admin account enabled.")
+    require(properties["networkRuleBypassOptions"] == "None", "Registry network bypass enabled.")
+
+    endpoint_id = services["registryEndpointId"]
+    endpoint = azure.get(endpoint_id, NETWORK_API)["properties"]
+    require(endpoint["subnet"]["id"].lower() ==
+            (lab["vnetIds"]["standalone"] + "/subnets/workload").lower(),
+            "Registry endpoint must be in the standalone subnet.")
+    connections = endpoint["privateLinkServiceConnections"]
+    require(len(connections) == 1, "Expected one registry private-link connection.")
+    connection = connections[0]["properties"]
+    require(connection["groupIds"] == ["registry"] and
+            connection["privateLinkServiceId"].lower() == services["registryId"].lower(),
+            "Registry endpoint targets the wrong service or subresource.")
+    require(connection["privateLinkServiceConnectionState"]["status"] == "Approved",
+            "Registry endpoint is not approved.")
+    groups = azure.list(f"{endpoint_id}/privateDnsZoneGroups", NETWORK_API)
+    require(len(groups) == 1, "Expected one registry DNS zone group.")
+    configs = groups[0]["properties"]["privateDnsZoneConfigs"]
+    require(len(configs) == 1 and
+            configs[0]["properties"]["privateDnsZoneId"].lower() == zone_id.lower(),
+            "Incorrect registry DNS zone group.")
+
+    nic = azure.get(endpoint["networkInterfaces"][0]["id"], NETWORK_API)["properties"]
+    endpoint_ips = {config["properties"]["privateIPAddress"] for config in nic["ipConfigurations"]}
+    hosts = [properties["loginServer"], *properties["dataEndpointHostNames"]]
+    require(len(hosts) >= 2, "Registry must expose login and regional data endpoints.")
+    dns_ips = set()
+    for host in hosts:
+        record_name = host.removesuffix(".azurecr.io")
+        record = azure.get(f"{zone_id}/A/{record_name}", PRIVATE_DNS_API)["properties"]
+        record_ips = {item["ipv4Address"] for item in record["aRecords"]}
+        require(record_ips and record_ips <= endpoint_ips, f"Incorrect registry DNS record: {host}")
+        dns_ips.update(record_ips)
+    require(dns_ips == endpoint_ips, "Registry DNS records do not cover all endpoint NIC IPs.")
+    print(f"{properties['loginServer']} -> {', '.join(sorted(endpoint_ips))} (standalone only)")
+
+
 def verify(azure, lab):
     vnets = lab["vnetIds"]
     expected_roles = {"hub", "spoke1", "spoke2", "test", "endpoints", "resolver", "standalone", "onprem"}
@@ -142,6 +195,7 @@ def verify(azure, lab):
     for key, version in (("storageId", "2025-01-01"), ("vaultId", "2024-11-01")):
         service = azure.get(services[key], version)["properties"]
         require(service["publicNetworkAccess"] == "Disabled", f"Public access enabled: {key}")
+    verify_registry(azure, lab)
     assert_run_succeeded(azure.get(lab["dnsVm"]["configurationId"], COMPUTE_API, "instanceView"))
     print("PASS deployed topology, private-zone links, ruleset, endpoints, and DNS bootstrap.")
 

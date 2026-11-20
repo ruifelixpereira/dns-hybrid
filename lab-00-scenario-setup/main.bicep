@@ -133,6 +133,7 @@ module zones './modules/private-zones.bicep' = {
   scope: dnsGroup
   params: {
     vnetIds: network.outputs.participatingVnetIds
+    standaloneVnetId: network.outputs.vnetIds.standalone
     tags: labTags
   }
 }
@@ -164,6 +165,8 @@ module services './modules/private-services.bicep' = {
     vaultEndpointIp: vaultEndpointIp
     blobZoneId: zones.outputs.blobZoneId
     vaultZoneId: zones.outputs.vaultZoneId
+    standaloneSubnetId: network.outputs.standaloneSubnetId
+    registryZoneId: zones.outputs.registryZoneId
     tags: labTags
   }
 }
@@ -202,6 +205,7 @@ output lab object = {
     zones.outputs.blobZoneId
     zones.outputs.vaultZoneId
   ]
+  standaloneZoneId: zones.outputs.registryZoneId
   resolverId: resolver.outputs.resolverId
   rulesetId: resolver.outputs.rulesetId
   inboundIp: resolver.outputs.inboundIp

@@ -5,9 +5,52 @@ param blobEndpointIp string
 param vaultEndpointIp string
 param blobZoneId string
 param vaultZoneId string
+param standaloneSubnetId string
+param registryZoneId string
 param tags object
 
 var suffix = uniqueString(subscription().subscriptionId, resourceGroup().id, prefix)
+
+resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
+  name: 'acr${suffix}'
+  location: location
+  tags: tags
+  sku: { name: 'Premium' }
+  properties: {
+    adminUserEnabled: false
+    publicNetworkAccess: 'Disabled'
+    networkRuleBypassOptions: 'None'
+    dataEndpointEnabled: true
+  }
+}
+
+resource registryEndpoint 'Microsoft.Network/privateEndpoints@2025-01-01' = {
+  name: '${prefix}-registry'
+  location: location
+  tags: tags
+  properties: {
+    subnet: { id: standaloneSubnetId }
+    privateLinkServiceConnections: [
+      {
+        name: 'registry'
+        properties: {
+          privateLinkServiceId: registry.id
+          groupIds: ['registry']
+        }
+      }
+    ]
+  }
+}
+
+resource registryZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2025-01-01' = {
+  parent: registryEndpoint
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      { name: 'registry', properties: { privateDnsZoneId: registryZoneId } }
+    ]
+  }
+}
 
 resource storage 'Microsoft.Storage/storageAccounts@2025-01-01' = {
   name: 'st${suffix}'
@@ -123,6 +166,9 @@ resource vaultZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups
 }
 
 output services object = {
+  registryId: registry.id
+  registryFqdn: registry.properties.loginServer
+  registryEndpointId: registryEndpoint.id
   storageId: storage.id
   vaultId: vault.id
   blobFqdn: '${storage.name}.blob.${environment().suffixes.storage}'

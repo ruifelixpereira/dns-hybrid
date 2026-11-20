@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate paired Azure inventories and report explicit hub/direct-peer DNS links."""
+"""Validate Azure inventory and report explicit hub/direct-peer DNS links."""
 
 import argparse
 import csv
@@ -18,6 +18,7 @@ COLUMNS = [
     "privateDnsZoneName", "privateDnsZoneId", "privateDnsZoneSubscriptionId",
     "privateDnsZoneResourceGroup", "virtualNetworkLinkName", "virtualNetworkLinkId",
     "linkedVnetName", "linkedVnetId", "relationshipToHub", "hubVnetName", "hubVnetId",
+    "tenantId",
 ]
 ARM_PREFIX = (
     r"/subscriptions/(?P<subscription>[^/]+)/resourceGroups/(?P<group>[^/]+)"
@@ -225,6 +226,7 @@ def create_rows(dns, networks, hub_id):
                 zone["name"], zone["id"], zone["subscriptionId"], zone["resourceGroup"],
                 link["name"], link["id"], linked["name"], linked["id"],
                 "hub" if linked_id == hub_key else "directPeer", hub["name"], hub["id"],
+                dns["tenantId"],
             )))
             if key in rows and rows[key] != row:
                 existing = rows[key]
@@ -273,15 +275,30 @@ def write_csv(rows, destination):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--private-dns-json", type=Path, required=True)
-    parser.add_argument("--vnets-json", type=Path, required=True)
+    inputs = parser.add_mutually_exclusive_group(required=True)
+    inputs.add_argument("--inventory-json", type=Path, help="Combined tenant inventory")
+    inputs.add_argument("--private-dns-json", type=Path, help="Legacy DNS inventory (requires --vnets-json)")
+    parser.add_argument("--vnets-json", type=Path, help="Legacy VNet inventory")
     parser.add_argument("--hub-vnet-id", required=True)
     parser.add_argument("--output-csv", type=Path, required=True)
     args = parser.parse_args(argv)
+    if args.inventory_json is not None and args.vnets_json is not None:
+        parser.error("--vnets-json cannot be used with --inventory-json")
+    if args.private_dns_json is not None and args.vnets_json is None:
+        parser.error("--vnets-json is required with --private-dns-json")
+    input_paths = (
+        (args.inventory_json,) if args.inventory_json is not None
+        else (args.private_dns_json, args.vnets_json)
+    )
     try:
-        if args.output_csv.resolve() in (args.private_dns_json.resolve(), args.vnets_json.resolve()):
+        if args.output_csv.resolve() in tuple(path.resolve() for path in input_paths):
             raise ValueError("--output-csv must not overwrite an inventory input")
-        rows = create_rows(load_json(args.private_dns_json), load_json(args.vnets_json), args.hub_vnet_id)
+        if args.inventory_json is not None:
+            dns = networks = load_json(args.inventory_json)
+        else:
+            dns = load_json(args.private_dns_json)
+            networks = load_json(args.vnets_json)
+        rows = create_rows(dns, networks, args.hub_vnet_id)
         write_csv(rows, args.output_csv)
     except (OSError, ValueError, TypeError, RecursionError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

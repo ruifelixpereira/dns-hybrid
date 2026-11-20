@@ -43,7 +43,7 @@ Sign in explicitly; neither script initiates interactive authentication.
 az login --tenant aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
 bash lab-01-inventory/scripts/export-inventory.sh \
   --tenant-id aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa \
-  --output-directory "./inventory"
+  --output-directory "./.inventory"
 ```
 
 Keep the adjacent [jq helper](./scripts/inventory.jq) with the Bash script.
@@ -54,15 +54,21 @@ Keep the adjacent [jq helper](./scripts/inventory.jq) with the Bash script.
 az login --tenant aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
 pwsh -NoProfile -File ./lab-01-inventory/scripts/Export-Inventory.ps1 `
   -TenantId aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa `
-  -OutputDirectory "./inventory"
+  -OutputDirectory "./.inventory"
 ```
 
-Either alternative writes:
+Either alternative writes one file, `<output-directory>/<tenantId>-inventory.json`,
+containing both:
 
-- `inventory/private-dns-zones.json`: all visible private zones, A record sets
+- `privateDnsZones`: all visible private zones, A record sets
   (including auto-registration and apex `@`), and VNet links.
-- `inventory/virtual-networks.json`: all visible VNets and their local peering
+- `virtualNetworks`: all visible VNets and their local peering
   resources.
+
+`<tenantId>` is the requested tenant GUID. Exports for different tenants can
+share a directory without overwriting each other's files. Existing separate
+DNS/VNet files (prefixed or unprefixed) are left untouched; they are not renamed
+or updated.
 
 Both use subscription-wide lists, so resource groups do not need to be supplied.
 Explicit child-resource list calls follow every REST `nextLink`, including for
@@ -86,32 +92,41 @@ subscription may never be returned, and partial RBAC visibility may be
 undetectable. Verify coverage against your organization's subscription register.
 An explicit denial fails the export rather than silently skipping resources.
 
-Files are staged in a private, uniquely named directory inside the destination.
-Collection/parsing errors leave existing files intact and remove that staging
-directory. Both documents are prepared before publication, but their two file
-replacements are **not a transaction**: an interrupted publication can leave
-mismatched files. The report rejects different inventory IDs. Rerun the export
-into a separate directory after such an interruption. Do not run simultaneous
-exports to the same destination.
+The combined document is staged in a private, uniquely named directory inside
+the destination and published with one file replacement after both collections
+are complete. Collection/parsing errors leave the existing inventory intact and
+remove that staging directory. Do not run simultaneous exports for the same
+tenant to the same destination.
 
 Collection is not an atomic Azure snapshot: resources can change between calls.
 
 ## JSON schema (version 1)
 
-The [DNS fixture](./tests/fixtures/private-dns-zones.json) and
-[VNet fixture](./tests/fixtures/virtual-networks.json) are complete examples.
+The [legacy DNS fixture](./tests/fixtures/private-dns-zones.json) and
+[legacy VNet fixture](./tests/fixtures/virtual-networks.json) illustrate the
+collections. The combined format contains both arrays under one metadata envelope.
 
-Each document has:
+The inventory document has:
 
 | Field | Type/meaning |
 | --- | --- |
 | `schemaVersion` | Integer `1` |
-| `inventoryId` | Shared generated string for this pair |
+| `inventoryId` | Generated string identifying this export |
 | `tenantId` | Requested tenant GUID |
-| `collectionStartedAt`, `collectionCompletedAt` | Shared ISO 8601 UTC strings |
+| `hubVnetId` | Automatically selected hub VNet ARM ID, or `null` when no VNets exist |
+| `collectionStartedAt`, `collectionCompletedAt` | ISO 8601 UTC strings |
 | `subscriptions` | Array of `{name, id, state}` for included subscriptions |
 | `excludedSubscriptions` | Array of `{name, id, state, reason}` for excluded states |
-| `privateDnsZones` or `virtualNetworks` | Resource array appropriate to the file |
+| `privateDnsZones` | Private DNS zone array |
+| `virtualNetworks` | VNet array |
+
+Hub selection considers VNets across all collected subscriptions. It chooses
+the VNet with the most local peering resources, regardless of peering state.
+Ties are resolved by the most private DNS zone links referencing the VNet
+(across all collected zones), then the lowest case-insensitive VNet ID.
+Link references are compared case-insensitively and ignore trailing slashes.
+Even if all VNets have zero peerings, these tie-breakers select one VNet.
+This is an inventory-based heuristic, not proof of the intended hub topology.
 
 Every resource and VNet reference has `name` and full ARM resource `id`.
 Subscription objects use GUID IDs. Resource identities are IDs, not names.
@@ -141,7 +156,8 @@ ID without additional Azure queries.
 
 ## Generate the offline CSV
 
-Obtain the hub's **full ARM ID**, for example by inspecting the VNet JSON, or
+Obtain the hub's **full ARM ID**, for example from `hubVnetId` in the inventory
+(confirm the automatically selected VNet is your intended hub), or
 explicitly running this optional operator command:
 
 ```bash
@@ -153,8 +169,7 @@ Then run (no Azure CLI, credentials, or network access required):
 
 ```bash
 python3 lab-01-inventory/scripts/report_dns_hub_links.py \
-  --private-dns-json "./inventory/private-dns-zones.json" \
-  --vnets-json "./inventory/virtual-networks.json" \
+  --inventory-json "./.inventory/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa-inventory.json" \
   --hub-vnet-id "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/network/providers/Microsoft.Network/virtualNetworks/hub" \
   --output-csv "./hub-dns-links.csv"
 ```
@@ -164,9 +179,13 @@ backslashes with backticks (and `python3` with `python` when appropriate).
 The CSV's parent directory must already exist.
 
 The script validates schema version, required fields/types, ARM identities,
-subscription coverage, timestamps, and agreement between both documents. The
+subscription coverage, and timestamps for both collections. The
 hub must exist in the VNet inventory. ID comparisons ignore case and trailing
 slashes. Invalid input returns nonzero and preserves an existing CSV.
+
+Legacy two-file inventories remain supported: use `--private-dns-json <dns-file>`
+and `--vnets-json <vnet-file>` instead of `--inventory-json`. The report checks
+that their metadata agrees. Do not mix the combined and legacy input options.
 
 A VNet is eligible if it is the hub or a **direct** peer recorded at either
 endpoint. A one-way peering entry is sufficient evidence. Direct remote peers
@@ -183,16 +202,78 @@ CSV. CSV quoting supports commas, quotes, and embedded newlines.
 Columns, in order:
 
 ```text
-privateDnsZoneName,privateDnsZoneId,privateDnsZoneSubscriptionId,privateDnsZoneResourceGroup,virtualNetworkLinkName,virtualNetworkLinkId,linkedVnetName,linkedVnetId,relationshipToHub,hubVnetName,hubVnetId
+privateDnsZoneName,privateDnsZoneId,privateDnsZoneSubscriptionId,privateDnsZoneResourceGroup,virtualNetworkLinkName,virtualNetworkLinkId,linkedVnetName,linkedVnetId,relationshipToHub,hubVnetName,hubVnetId,tenantId
 ```
 
 `relationshipToHub` is `hub` or `directPeer`. See the
 [expected fixture CSV](./tests/fixtures/expected.csv).
+`tenantId` is the inventory tenant GUID on every row, including links to external
+peers; it does not identify the remote VNet's tenant.
 
 **This is relationship inventory, not connectivity validation.** Peering does
 not make private DNS zone links transitive. The report includes only explicit
 links to eligible VNets, not zones automatically inherited by peers, and proves
 neither DNS resolution nor data-plane reachability.
+
+## Consolidate hub-link CSVs into a central-tenant plan
+
+From the repository root, select the tenant that will host the private DNS zones.
+One command generates all tenant hub-link reports and the consolidated plan:
+
+```bash
+bash lab-01-inventory/scripts/consolidate-dns-links.sh \
+  --central-tenant-id aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
+```
+
+The default directory is `./inventory`. To use another directory, add
+`--inventory-directory "./.inventory"`. The script first calls the batch
+reporting implementation, then consolidates only the CSVs successfully generated
+in that run, in inventory filename order. Old CSVs belonging to skipped tenants
+or tenants without a current JSON inventory are ignored.
+
+Requires Bash and Python 3 (standard library only). Keep the adjacent report
+scripts together. The generated `<tenantId>-hub-dns-links.csv` files and the final
+`hub-dns-zones.csv` are all written in the inventory directory. Explicit input
+CSV and output path arguments are no longer used.
+The final output columns, in order, are:
+
+```text
+privateDnsZoneName,tenantId,privateDnsZoneId,privateDnsZoneSubscriptionId,privateDnsZoneResourceGroup,centralTenantOperation,originalTenantOperation
+```
+
+One row is retained per tenant/zone ID, removing repeated hub/spoke link rows.
+The same domain with different zone IDs remains separate. The first occurrence
+and its original metadata spelling are preserved; conflicting metadata for the
+same tenant/zone ID is an error. Tenant/zone ID comparisons ignore case, and zone
+IDs ignore trailing slashes. Domain comparisons ignore case and trailing dots.
+
+All central-tenant zones are considered before assigning operations, regardless
+of input order:
+
+| Zone | `centralTenantOperation` | `originalTenantOperation` |
+| --- | --- | --- |
+| Already in the central tenant | `none` | `none` |
+| Other tenant, domain already in central or planned for creation | `repeated` | `delete` |
+| Other tenant, domain not yet in central or planned | `create` | `delete` |
+
+A missing domain is marked `create` only on its first non-central occurrence;
+subsequent occurrences are `repeated`. The tenant ID, subscription ID, resource
+group, and zone ID always describe the **original** zone, not its future central
+destination.
+
+**No Azure resources are created or deleted.** This CSV is a plan, not an
+execution script. Existence checks cover only the generated CSVs; hub-link
+reports omit zones without eligible links. Ensure the inputs cover all relevant
+central zones before treating a `create` operation as authoritative. A `delete`
+label is not proof that DNS records, links, or dependencies have been migrated.
+
+Quoted CSV fields and header-only inputs are supported. Required metadata must
+be nonempty and tenant IDs must be GUIDs. The inventory directory must already
+exist and contain matching tenant JSON files. A batch-reporting failure stops
+consolidation and preserves the existing final CSV. Reports already generated
+before a later failure remain in place. An existing final output is replaced
+only after successful consolidation. If every tenant is skipped or has no
+matching links, the final CSV contains only its header.
 
 ## Tests
 
@@ -200,13 +281,17 @@ neither DNS resolution nor data-plane reachability.
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
   -s lab-01-inventory/tests -p 'test_inventory.py' -v
 bash -n lab-01-inventory/scripts/export-inventory.sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+  -s lab-01-inventory/tests -p 'test_consolidate_dns_links.py' -v
+bash -n lab-01-inventory/scripts/consolidate-dns-links.sh
 ```
 
 Tests replace `az` with a strict local mock and never invoke the real Azure CLI.
 They cover schema-equivalent exports, multiple subscriptions, every paginated
 collection, empty/singleton results, contextual failures, preservation of old
 outputs, bounded retry, direct/incoming/external relationships, non-transitivity,
-duplicates, ID normalization, escaping, and invalid input.
+duplicates, ID normalization, escaping, invalid input, and batch reporting with
+per-tenant hub IDs and output filenames.
 
 PowerShell tests are skipped if `pwsh` is unavailable. Set `PWSH` to an explicit
 PowerShell executable to include them. Azure live integration and Windows-native

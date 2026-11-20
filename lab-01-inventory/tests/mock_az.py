@@ -61,6 +61,28 @@ try:
     assert args[-3:] == ["--only-show-errors", "--output", "json"], args
     args = args[:-3]
     mode = os.environ.get("MOCK_MODE", "")
+    if mode in ("hub-other-subscription", "hub-dns-link-tie", "hub-id-tie"):
+        target = NETWORKS["virtualNetworks"][2 if mode == "hub-other-subscription" else 1]
+        template = target["peerings"][0]
+        count = 3 if mode == "hub-other-subscription" else 2
+        target["peerings"] = [
+            {**template, "name": f"extra-{index}",
+             "id": target["id"] + f"/virtualNetworkPeerings/extra-{index}"}
+            for index in range(count)
+        ]
+        if mode == "hub-dns-link-tie":
+            zone = DNS["privateDnsZones"][1]
+            link = DNS["privateDnsZones"][0]["virtualNetworkLinks"][1]
+            zone["virtualNetworkLinks"].append({
+                **link, "name": "extra-spoke-link",
+                "id": zone["id"] + "/virtualNetworkLinks/extra-spoke-link",
+                "virtualNetwork": {"name": target["name"], "id": target["id"].upper() + "/"},
+            })
+    if mode == "hub-zero-peerings":
+        for vnet in NETWORKS["virtualNetworks"]:
+            vnet["peerings"] = []
+        for zone in DNS["privateDnsZones"]:
+            zone["virtualNetworkLinks"] = []
     if args == ["account", "list", "--all", "--refresh"]:
         accounts = [
             {**item, "tenantId": DNS["tenantId"]}

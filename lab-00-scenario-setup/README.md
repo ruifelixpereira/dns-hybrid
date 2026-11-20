@@ -2,7 +2,7 @@
 
 [Back to the lab index](../README.md)
 
-Reusable subscription-scoped Bicep for **two independent environments**: Subscription 1 / Tenant A and Subscription 2 / Tenant B. Each gets the same topology, its own DNS zones, Private Resolver, Storage account, Key Vault, and Windows DNS VM. There is **no cross-tenant connectivity or shared infrastructure**.
+Reusable subscription-scoped Bicep for **two independent environments**: Subscription 1 / Tenant A and Subscription 2 / Tenant B. Each gets the same topology, its own DNS zones, Private Resolver, Storage account, Key Vault, Premium Azure Container Registry, and Windows DNS VM. There is **no cross-tenant connectivity or shared infrastructure**.
 
 Nothing deploys automatically. Review costs and run validation/what-if before explicitly creating resources.
 
@@ -49,8 +49,10 @@ flowchart TB
   H --- R[Resolver VNet: inbound and outbound subnets]
   H --- O[Simulated on-premises VNet: Windows DNS VM]
   R --- O
-  I[Standalone VNet: no peers or private DNS links]
-  Z[Private DNS zones in dns-private-zones]
+  I[Standalone VNet: registry private endpoint, no peers]
+  C[Registry private DNS zone: privatelink.azurecr.io]
+  C -. linked only to standalone .-> I
+  Z[Blob and vault private DNS zones in dns-private-zones]
   F[Forwarding ruleset: demo-lab.]
   Z -. links to hub, spokes, test, endpoints, resolver .-> R
   F -. links to hub, spokes, test, endpoints, resolver .-> R
@@ -67,7 +69,7 @@ flowchart TB
 | Test | 10.10.3.0/24 | 10.20.3.0/24 | workload: first /26 |
 | Private endpoints | 10.10.4.0/24 | 10.20.4.0/24 | workload: first /26; both private endpoints |
 | Resolver | 10.10.5.0/24 | 10.20.5.0/24 | inbound: .0/28; outbound: .16/28 |
-| Standalone | 10.10.6.0/24 | 10.20.6.0/24 | workload: first /26 |
+| Standalone | 10.10.6.0/24 | 10.20.6.0/24 | workload: first /26; registry private endpoint |
 | Simulated on-premises | 10.10.7.0/24 | 10.20.7.0/24 | workload: first /26; Windows DNS at .4 |
 
 Inbound resolver IPs are `10.10.5.4` and `10.20.5.4`. Blob and vault private endpoints use `.4` and `.5` in the endpoints subnet. All addresses can be overridden with the typed `vnetPrefixes` and `subnetPrefixes` parameters, `inboundIp`, `dnsVmIp`, `blobEndpointIp`, and `vaultEndpointIp`. Defaults derive from `labCidr`. Keep all VNet/subnet ranges nonoverlapping and endpoint addresses inside their subnets; Azure reserves the first four and last subnet addresses. Resolver subnets must be dedicated, delegated to `Microsoft.Network/dnsResolvers`, and within the service-supported /28 to /24 range. Static endpoint addresses are creation-time settings; changing them can require recreating the private endpoints.
@@ -75,17 +77,28 @@ Inbound resolver IPs are `10.10.5.4` and `10.20.5.4`. Blob and vault private end
 Each environment creates four resource groups:
 
 - `<prefix>-network`: VNets, peerings, resolver/ruleset, Windows DNS NSG, and egress NAT.
-- `dns-private-zones`: both private DNS zones.
-- `<prefix>-services`: Storage, Key Vault, both private endpoints and their DNS zone groups.
+- `dns-private-zones`: blob, vault, and registry private DNS zones.
+- `<prefix>-services`: Storage, Key Vault, Premium Container Registry, all three private endpoints and their DNS zone groups.
 - `<prefix>-simulation`: Windows DNS VM/NIC and managed bootstrap Run Command.
 
-Use fresh subscriptions or ensure these resource groups and private-zone namespaces are dedicated to this lab. The fixed `dns-private-zones` name means this template is **not designed for multiple lab instances in one subscription**. Storage/Key Vault names use a deterministic subscription/resource-group/prefix hash.
+Use fresh subscriptions or ensure these resource groups and private-zone namespaces are dedicated to this lab. The fixed `dns-private-zones` name means this template is **not designed for multiple lab instances in one subscription**. Storage/Key Vault/registry names use a deterministic subscription/resource-group/prefix hash.
+
+The registry requires **Premium** because Azure Container Registry Basic does not
+support private endpoints. Public network access, the admin account, and trusted
+service network bypass are disabled. The endpoint uses dynamic private IPs for
+the registry login and regional data endpoints in the standalone subnet. Its
+DNS zone group creates the corresponding records in `privatelink.azurecr.io`.
+Only the standalone VNet links to that zone. It has no peerings, resolver/ruleset
+links, or links to the blob/vault zones. No container images or role assignments
+are created. The shared template applies this configuration independently to
+both tenant parameter files.
 
 ### DNS flows
 
 1. **Azure private service names:** hub, spoke 1, spoke 2, test, endpoints, and resolver VNets retain Azure-provided DNS. Both `privatelink.blob.core.windows.net` and `privatelink.vaultcore.azure.net` have registration-disabled links to all six VNets. Normal Storage/Key Vault service names follow their public CNAME chains into these private zones, returning endpoint IPs.
 2. **Fake on-premises names:** each of those six VNets has a ruleset link. Azure DNS applies `demo-lab.`, sends the request through the resolver outbound endpoint, and reaches Windows DNS over the resolver/on-premises direct peering. Windows DNS hosts authoritative zone `demo-lab` with `dns-test.demo-lab` pointing to its own private IP.
 3. **Simulated on-premises to Azure:** Windows DNS conditionally forwards `blob.core.windows.net` and `vault.azure.net` to the resolver inbound IP. Inbound resolves through the resolver VNet's private-zone links. The simulated-on-premises VNet itself has **no private-zone or ruleset links**; VM network settings retain Azure DNS, and DNS service tests explicitly address its local Windows DNS server.
+4. **Standalone registry:** Azure-provided DNS resolves the registry login and regional data names through the standalone-only `privatelink.azurecr.io` zone. No registry zone links or conditional forwarders are added to the hub, spokes, resolver, or Windows DNS.
 
 There are no wildcard forwarding rules and no rules targeting the resolver's own inbound IP. Linking this ruleset to the resolver VNet is safe because its only destination is the authoritative Windows server.
 
@@ -99,9 +112,9 @@ There are no wildcard forwarding rules and no rules targeting the resolver's own
 | Private endpoints VNet | Yes | Expected within the VNet |
 | Spoke 1 / Spoke 2 / Test / Resolver | Yes | **No route through hub to sibling endpoints VNet** |
 | Simulated on-premises VM querying its Windows DNS | Yes, through conditional forwarders | **No transitive route to endpoints VNet** |
-| Standalone | No private-zone integration | No private route |
+| Standalone | Registry only; no blob/vault private-zone integration | Registry endpoint within its own VNet only |
 
-Standalone means no private peering/zone/ruleset integration, **not** guaranteed NXDOMAIN for a public Storage/Key Vault name. Public DNS can still answer. Public service access is disabled regardless. Even with working DNS and routing, service operations need appropriate Entra data-plane RBAC; this lab creates no role assignments, secrets, or blob data. Shared-key Storage authorization is disabled.
+Standalone means no peering or shared DNS/ruleset integration, with its own registry zone only, **not** guaranteed NXDOMAIN for a public Storage/Key Vault name. Public DNS can still answer. Public service access is disabled regardless. Even with working DNS and routing, service operations need appropriate Entra data-plane RBAC; this lab creates no role assignments, secrets, or blob data. Shared-key Storage authorization is disabled.
 
 ## Prerequisites
 
@@ -147,7 +160,7 @@ az login --tenant "$TENANT_A_ID"
 az account set --subscription "$SUBSCRIPTION_1_ID"
 az account show --query '{subscription:id,tenant:tenantId}' -o table
 
-for provider in Microsoft.Network Microsoft.Compute Microsoft.Storage Microsoft.KeyVault; do
+for provider in Microsoft.Network Microsoft.Compute Microsoft.Storage Microsoft.KeyVault Microsoft.ContainerRegistry; do
   az provider register --subscription "$SUBSCRIPTION_1_ID" --namespace "$provider" --wait
 done
 
@@ -168,7 +181,7 @@ az login --tenant "$TENANT_B_ID"
 az account set --subscription "$SUBSCRIPTION_2_ID"
 az account show --query '{subscription:id,tenant:tenantId}' -o table
 
-for provider in Microsoft.Network Microsoft.Compute Microsoft.Storage Microsoft.KeyVault; do
+for provider in Microsoft.Network Microsoft.Compute Microsoft.Storage Microsoft.KeyVault Microsoft.ContainerRegistry; do
   az provider register --subscription "$SUBSCRIPTION_2_ID" --namespace "$provider" --wait
 done
 
@@ -200,6 +213,12 @@ python3 scripts/verify.py --tenant "$TENANT_B_ID" \
 
 Configuration checks verify all directed peerings, default VNet DNS, exact private-zone/ruleset VNet link membership, the outbound endpoint association, the forwarding target, approved endpoint subresources/subnets/zone groups, actual endpoint NIC IPs against outputs, public service access disabled, and the bootstrap's actual instance-view execution state/exit code. Nonsecret deployment outputs include both private endpoint IPs and the VM/endpoint/resolver resource IDs.
 
+Registry checks additionally enforce Premium, disabled admin/network bypass,
+the standalone-only zone link, endpoint placement/approval, DNS zone group, and
+login/regional data A records matching its dynamically allocated NIC IPs.
+Outputs expose `standaloneZoneId` and `services.registryId`, `registryFqdn`,
+and `registryEndpointId`; the existing `zoneIds` list remains blob/vault only.
+
 DNS tests run **on the Windows VM**, without adding clients:
 
 - Query resolver inbound for `dns-test.demo-lab` and require the Windows VM IP; repeat with TCP-only DNS.
@@ -220,13 +239,20 @@ Test-NetConnection '<blob-private-ip>' -Port 443
 
 Expect the DNS results described above. TCP/443 should be reachable from hub or the endpoints VNet, but not from a spoke/test VNet through hub alone. From standalone, `demo-lab` should not have this lab's forwarding integration; public service DNS answers are not evidence of private connectivity. These operator tests are not performed by the verification script.
 
+From a client in standalone, query `<registry-name>.azurecr.io` and
+`<registry-name>.<region>.data.azurecr.io` against `168.63.129.16` and check that
+both return standalone-subnet IPs; test TCP/443 to the registry login name.
+Clients in other lab VNets have no private route to those IPs or link to the
+registry zone. No standalone client VM is deployed, so the existing Windows
+VM DNS tests do not test registry resolution from standalone.
+
 ## Security, egress, and costs
 
 - No VM public IP, RDP/WinRM rule, Bastion, AD domain controller, extra VM, or cross-tenant peering. Use managed Run Command.
 - Windows DNS inbound NSG TCP/UDP 53 allows only resolver inbound/outbound subnet CIDRs plus explicit `allowedDnsClientCidrs`; all other inbound traffic is denied. Bootstrap disables broad built-in DNS firewall rules and creates scoped replacements. Adding an allowed client CIDR does not create routing.
 - The on-premises subnet has `defaultOutboundAccess: false` and an explicit **Standard NAT Gateway with an egress-only public IP**. No public IP is attached to the VM. NAT enables Windows servicing, activation, agent/extension downloads, and role/bootstrap dependencies without relying on implicit outbound access. It does not expose inbound listeners. Outbound NSG defaults permit outbound traffic: NAT is not an FQDN filter or production egress firewall.
 - Other subnets also disable default outbound access. Managed DNS resolver egress is handled by the Azure service; do not attach the DNS VM NAT to dedicated resolver subnets.
-- **Recurring costs:** DNS Private Resolver inbound/outbound endpoints and ruleset links/queries as billed; Windows VM compute/licensing, managed OS disk and boot diagnostics; NAT gateway hourly/data processing and Standard public IPv4; private endpoints, private DNS zones/queries, peering transfer, Storage and Key Vault usage. There is one complete set in each tenant. Check the Azure pricing calculator for your region.
+- **Recurring costs:** DNS Private Resolver inbound/outbound endpoints and ruleset links/queries as billed; Windows VM compute/licensing, managed OS disk and boot diagnostics; NAT gateway hourly/data processing and Standard public IPv4; private endpoints, private DNS zones/queries, peering transfer, Storage and Key Vault usage; **Premium Container Registry in each tenant**, including its additional private endpoint and DNS zone. There is one complete set in each tenant. Check the Azure pricing calculator for your region.
 - VM deallocation stops compute billing, not disks, Private Resolver, NAT, private endpoints, or other retained resources. Delete the lab when finished.
 - Key Vault soft delete retains its name after deletion (7-day retention here); immediate redeployment using the same prefix can require deliberate recovery or purge with separate permissions. Purge protection is not enabled for this disposable lab. Never purge unrelated vaults.
 

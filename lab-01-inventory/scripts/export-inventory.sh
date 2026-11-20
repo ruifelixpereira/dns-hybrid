@@ -20,6 +20,7 @@ while (($#)); do
 done
 [[ "$tenant_id" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]] ||
     die '--tenant-id must be a tenant GUID'
+inventory_file="${tenant_id}-inventory.json"
 for dependency in az jq mktemp date; do
     command -v "$dependency" >/dev/null || die "Missing dependency: $dependency"
 done
@@ -32,9 +33,8 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 mkdir -p -- "$output_directory"
 output_directory=$(cd -- "$output_directory" && pwd)
-for file in private-dns-zones.json virtual-networks.json; do
-    [[ ! -d "$output_directory/$file" ]] || die "Output is a directory: $output_directory/$file"
-done
+[[ ! -d "$output_directory/$inventory_file" ]] ||
+    die "Output is a directory: $output_directory/$inventory_file"
 stage=$(mktemp -d "$output_directory/.inventory.XXXXXXXX")
 started=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 inventory_id="${started}-$$-${stage##*.}"
@@ -138,19 +138,28 @@ for subscription in "${subscriptions[@]}"; do
             'include "inventory"; . + {peerings: ($peerings[0] | peerings)}' "$stage/vnet.json" >>"$stage/vnets.ndjson"
     done <"$stage/vnet-list.ndjson"
 done
-context='staging output documents'
+context='staging inventory document'
 completed=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 jq --arg tenantId "$tenant_id" --arg inventoryId "$inventory_id" --arg started "$started" --arg completed "$completed" \
     '. + {schemaVersion: 1, tenantId: $tenantId, inventoryId: $inventoryId,
     collectionStartedAt: $started, collectionCompletedAt: $completed}' "$stage/coverage.json" >"$stage/envelope.json"
 for kind in zones vnets; do
-    if [[ "$kind" == zones ]]; then key=privateDnsZones; file=private-dns-zones.json
-    else key=virtualNetworks; file=virtual-networks.json; fi
-    jq -s 'sort_by(.id | ascii_downcase)' "$stage/$kind.ndjson" >"$stage/resources.json"
-    jq --arg key "$key" --slurpfile resources "$stage/resources.json" \
-        '. + {($key): $resources[0]}' "$stage/envelope.json" >"$stage/$file"
+    jq -s 'sort_by(.id | ascii_downcase)' "$stage/$kind.ndjson" >"$stage/$kind.json"
 done
-context='publishing output documents (a mismatched pair is rejected by the report)'
-mv -f -- "$stage/private-dns-zones.json" "$output_directory/private-dns-zones.json"
-mv -f -- "$stage/virtual-networks.json" "$output_directory/virtual-networks.json"
+jq --slurpfile zones "$stage/zones.json" --slurpfile vnets "$stage/vnets.json" \
+    '. + {privateDnsZones: $zones[0], virtualNetworks: $vnets[0]} |
+    (reduce .privateDnsZones[].virtualNetworkLinks[] as $link ({};
+        ($link.virtualNetwork.id | sub("/+$"; "") | ascii_downcase) as $id |
+        .[$id] = ((.[$id] // 0) + 1))) as $linkCounts |
+    . + {hubVnetId: (.virtualNetworks |
+        if length == 0 then null else
+            sort_by([
+                -(.peerings | length),
+                -($linkCounts[(.id | sub("/+$"; "") | ascii_downcase)] // 0),
+                (.id | ascii_downcase)
+            ]) | .[0].id
+        end)}' \
+    "$stage/envelope.json" >"$stage/$inventory_file"
+context='publishing inventory document'
+mv -f -- "$stage/$inventory_file" "$output_directory/$inventory_file"
 printf 'Inventory %s written to %s\n' "$inventory_id" "$output_directory" >&2

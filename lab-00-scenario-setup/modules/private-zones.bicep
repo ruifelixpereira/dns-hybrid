@@ -1,4 +1,5 @@
 param vnetIds string[]
+param standaloneVnetId string
 param tags object
 
 resource blobZone 'Microsoft.Network/privateDnsZones@2024-06-01' = {
@@ -35,6 +36,24 @@ resource vaultLinks 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-
   }
 }]
 
+resource registryZone 'Microsoft.Network/privateDnsZones@2024-06-01' = {
+  name: 'privatelink.azurecr.io'
+  location: 'global'
+  tags: tags
+}
+
+resource registryLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = {
+  parent: registryZone
+  name: 'standalone'
+  location: 'global'
+  tags: tags
+  properties: {
+    registrationEnabled: false
+    virtualNetwork: { id: standaloneVnetId }
+  }
+}
+
+output registryZoneId string = registryZone.id
 output blobZoneId string = blobZone.id
 output vaultZoneId string = vaultZone.id
 

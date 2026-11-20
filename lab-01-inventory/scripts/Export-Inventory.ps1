@@ -10,6 +10,7 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 $stage = $null
 $context = 'initialization'
+$inventoryFile = "${TenantId}-inventory.json"
 
 function Get-Text($Value) {
     if ($Value -isnot [string] -or [string]::IsNullOrWhiteSpace($Value)) {
@@ -118,10 +119,8 @@ try {
     $null = Get-Command az -ErrorAction Stop
     $null = [IO.Directory]::CreateDirectory($OutputDirectory)
     $OutputDirectory = (Resolve-Path -LiteralPath $OutputDirectory).Path
-    foreach ($file in @('private-dns-zones.json', 'virtual-networks.json')) {
-        if ([IO.Directory]::Exists((Join-Path $OutputDirectory $file))) {
-            throw "Output is a directory: $file"
-        }
+    if ([IO.Directory]::Exists((Join-Path $OutputDirectory $inventoryFile))) {
+        throw "Output is a directory: $inventoryFile"
     }
     $inventoryId = [guid]::NewGuid().ToString()
     $stage = Join-Path $OutputDirectory ".inventory.$inventoryId"
@@ -216,20 +215,43 @@ try {
             $vnets.Add($vnet)
         }
     }
-    $context = 'staging output documents'
+    $context = 'staging inventory document'
+    $linkCounts = @{}
+    foreach ($zone in $zones) {
+        foreach ($link in $zone.virtualNetworkLinks) {
+            $id = $link.virtualNetwork.id.TrimEnd('/')
+            if ($linkCounts.ContainsKey($id)) { $linkCounts[$id]++ }
+            else { $linkCounts[$id] = 1 }
+        }
+    }
+    $hubVnetId = $null
+    $mostPeerings = -1
+    $mostLinks = -1
+    foreach ($vnet in (Sort-Resources $vnets.ToArray())) {
+        $peeringCount = $vnet.peerings.Count
+        $id = $vnet.id.TrimEnd('/')
+        $linkCount = if ($linkCounts.ContainsKey($id)) { $linkCounts[$id] } else { 0 }
+        if ($peeringCount -gt $mostPeerings -or
+            ($peeringCount -eq $mostPeerings -and $linkCount -gt $mostLinks)) {
+            $hubVnetId = $vnet.id
+            $mostPeerings = $peeringCount
+            $mostLinks = $linkCount
+        }
+    }
     $envelope = @{
         schemaVersion = 1; inventoryId = $inventoryId; tenantId = $TenantId.ToString()
+        hubVnetId = $hubVnetId
         collectionStartedAt = $started
         collectionCompletedAt = [DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
         subscriptions = (Sort-Resources $subscriptions.ToArray())
         excludedSubscriptions = (Sort-Resources $excluded.ToArray())
     }
-    Write-JsonFile ($envelope + @{privateDnsZones = (Sort-Resources $zones.ToArray())}) "$stage/private-dns-zones.json"
-    Write-JsonFile ($envelope + @{virtualNetworks = (Sort-Resources $vnets.ToArray())}) "$stage/virtual-networks.json"
-    $context = 'publishing output documents (a mismatched pair is rejected by the report)'
-    foreach ($file in @('private-dns-zones.json', 'virtual-networks.json')) {
-        [IO.File]::Move((Join-Path $stage $file), (Join-Path $OutputDirectory $file), $true)
-    }
+    Write-JsonFile ($envelope + @{
+        privateDnsZones = (Sort-Resources $zones.ToArray())
+        virtualNetworks = (Sort-Resources $vnets.ToArray())
+    }) (Join-Path $stage $inventoryFile)
+    $context = 'publishing inventory document'
+    [IO.File]::Move((Join-Path $stage $inventoryFile), (Join-Path $OutputDirectory $inventoryFile), $true)
     [Console]::Error.WriteLine("Inventory $inventoryId written to $OutputDirectory")
 } catch {
     [Console]::Error.WriteLine("Error during ${context}: $($_.Exception.Message)")
