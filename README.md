@@ -10,6 +10,7 @@ Hands-on labs for Azure hybrid DNS across independent subscriptions and tenants.
 | [Lab 01 - Inventory](./lab-01-inventory/README.md) | Export tenant-scoped private DNS and VNet inventories, then report explicit zone links to a hub and its direct peers. |
 | [Lab 02 - Central private DNS zones](./lab-02-central-dns-zones/README.md) | Create missing central private DNS zones and keep only resolver VNet links for CSV-listed destination-group zones. |
 | [Lab 04 - VNet DNS alignment](./lab-04-vnet-dns-alignment/README.md) | Point inventoried hubs/direct spokes to their tenant's resolver inbound DNS and keep resolver VNets on Azure-provided DNS. |
+| [Lab 05 - On-premises conditional forwarders](./lab-05-onprem-conditional-forwarders/README.md) | Discover central resolver-linked private DNS zones and create local Windows DNS conditional forwarders to its inbound IPs. |
 
 Each lab contains its own infrastructure, parameters, scripts, tests, and instructions.
 Repository-wide configuration stays at the root.
