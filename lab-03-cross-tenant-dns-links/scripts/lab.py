@@ -103,7 +103,7 @@ def pages(url, subscription=None):
     return result
 
 
-def discover(directory, central_tenant):
+def discover(directory, central_tenant=None):
     if not directory.is_dir():
         raise ValueError(f"Inventory directory does not exist: {directory}")
     sources = sorted(directory.glob("*-inventory.json"))
@@ -131,7 +131,11 @@ def discover(directory, central_tenant):
 
 
 def resolver_targets(path, documents):
-    document = object_value(read_json(path), "resolver mapping")
+    return validate_resolvers(read_json(path), documents)
+
+
+def validate_resolvers(document, documents):
+    document = object_value(document, "resolver mapping")
     if type(document.get("schemaVersion")) is not int or document["schemaVersion"] != 1:
         raise ValueError("Resolver mapping: unsupported schemaVersion")
     targets = []
@@ -144,7 +148,7 @@ def resolver_targets(path, documents):
         if guid(parts["subscription"], "resolver subscription") != subscription:
             raise ValueError("Resolver mapping subscription disagrees with VNet ID")
         if tenant not in documents:
-            raise ValueError(f"Resolver mapping contains an undiscovered or central tenant: {tenant}")
+            raise ValueError(f"Resolver mapping contains an undiscovered tenant: {tenant}")
         networks = {normalized(v["id"]): v for v in documents[tenant]["virtualNetworks"]}
         key = normalized(resource_id)
         if key not in networks:
@@ -158,7 +162,7 @@ def resolver_targets(path, documents):
             "resourceGroup": parts["group"],
         })
     if {entry["tenantId"] for entry in targets} != set(documents):
-        raise ValueError("Resolver mapping must cover every discovered non-central tenant")
+        raise ValueError("Resolver mapping must cover every discovered tenant")
     return sorted(targets, key=lambda entry: normalized(entry["resolverVnetId"]))
 
 
